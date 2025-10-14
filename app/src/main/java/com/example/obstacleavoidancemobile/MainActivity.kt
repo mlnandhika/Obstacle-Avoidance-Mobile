@@ -1,6 +1,7 @@
 package com.example.obstacleavoidancemobile
 
 import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
@@ -14,6 +15,8 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import android.speech.tts.TextToSpeech
 import java.util.Locale
+import kotlin.math.max
+import kotlin.math.min
 
 class MainActivity : ComponentActivity() {
 
@@ -23,27 +26,31 @@ class MainActivity : ComponentActivity() {
     private lateinit var detector: Detector
     private lateinit var tts: TextToSpeech
 
+    private var lastSpokenTime = 0L
+    private val speakInterval = 3000L // ms (3 detik antar ucapan)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
         setContentView(R.layout.activity_main)
 
         viewFinder = findViewById(R.id.viewFinder)
         overlay = findViewById(R.id.overlay)
 
-        // Init detector
+        // Init detector (pastikan model & label ada di assets)
         detector = Detector(this, "best_float32.tflite", "labels.txt")
 
-        // Init TTS
+        // Init Text-to-Speech (English)
         tts = TextToSpeech(this) { status ->
             if (status == TextToSpeech.SUCCESS) {
-                tts.language = Locale("id", "ID") // gunakan bahasa Indonesia
+                tts.language = Locale.US
             }
         }
 
-        // Camera Executor
+        // Camera executor
         cameraExecutor = Executors.newSingleThreadExecutor()
 
-        // Minta izin kamera
+        // Request camera permission
         requestPermissionLauncher.launch(Manifest.permission.CAMERA)
     }
 
@@ -52,13 +59,12 @@ class MainActivity : ComponentActivity() {
             if (isGranted) {
                 startCamera()
             } else {
-                Toast.makeText(this, "Izin kamera ditolak", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Camera permission denied", Toast.LENGTH_SHORT).show()
             }
         }
 
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
-
         cameraProviderFuture.addListener({
             val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
 
@@ -67,6 +73,7 @@ class MainActivity : ComponentActivity() {
             }
 
             val imageAnalyzer = ImageAnalysis.Builder()
+                .setTargetResolution(android.util.Size(640, 480))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
                 .also {
@@ -87,36 +94,35 @@ class MainActivity : ComponentActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    private var lastSpokenTime = 0L
-    private var lastMessage = ""
-
-    private fun speakIfNeeded(message: String) {
-        val now = System.currentTimeMillis()
-        if (message != lastMessage || now - lastSpokenTime > 1500) { // 1.5 detik
-            lastSpokenTime = now
-            lastMessage = message
-            tts.speak(message, TextToSpeech.QUEUE_FLUSH, null, null)
-        }
-    }
-
     private fun processImageProxy(imageProxy: ImageProxy) {
         try {
-            val bitmap = ImageUtils.imageProxyToBitmap(imageProxy) // pastikan kamu punya ImageUtils
-            val results = detector.detect(bitmap)
+            val bitmap = ImageUtils.imageProxyToBitmap(imageProxy)
+            val detections = detector.detect(bitmap)
+
+            // Jalankan NMS agar box tidak bertumpuk
+            val filteredDetections = applyNMS(detections, 0.45f)
 
             runOnUiThread {
-                overlay.updateDetections(results, bitmap.width, bitmap.height)
+                overlay.setFrameSize(bitmap.width, bitmap.height)
+                overlay.updateDetections(filteredDetections)
 
-                if (results.isNotEmpty()) {
-                    val det = results.maxByOrNull { it.score }!! // ambil deteksi paling yakin
-                    val posisi = when {
-                        (det.xMin + det.xMax) / 2 < bitmap.width / 3 -> "kiri"
-                        (det.xMin + det.xMax) / 2 > bitmap.width * 2 / 3 -> "kanan"
-                        else -> "tengah"
+                // TTS — bicara hanya 1x tiap 3 detik
+                if (filteredDetections.isNotEmpty()) {
+                    val now = System.currentTimeMillis()
+                    if (now - lastSpokenTime > speakInterval) {
+                        lastSpokenTime = now
+
+                        val det = filteredDetections[0]
+                        val centerX = (det.xMin + det.xMax) / 2
+                        val position = when {
+                            centerX < bitmap.width / 3 -> "left"
+                            centerX > bitmap.width * 2 / 3 -> "right"
+                            else -> "center"
+                        }
+                        val message = "There is a ${det.label} in $position"
+                        Log.d("Detection", message)
+                        tts.speak(message, TextToSpeech.QUEUE_FLUSH, null, "detect")
                     }
-                    val message = "Ada ${det.label} di $posisi"
-                    Log.d("Detection", message)
-                    speakIfNeeded(message)
                 }
             }
         } catch (e: Exception) {
@@ -124,6 +130,39 @@ class MainActivity : ComponentActivity() {
         } finally {
             imageProxy.close()
         }
+    }
+
+    /**
+     * Non-Maximum Suppression (NMS)
+     * Menghapus deteksi yang saling tumpang tindih
+     */
+    private fun applyNMS(detections: List<Detection>, iouThreshold: Float): List<Detection> {
+        val sorted = detections.sortedByDescending { it.score }.toMutableList()
+        val result = mutableListOf<Detection>()
+
+        while (sorted.isNotEmpty()) {
+            val best = sorted.removeAt(0)
+            result.add(best)
+
+            val iterator = sorted.iterator()
+            while (iterator.hasNext()) {
+                val other = iterator.next()
+                val iou = calculateIoU(best, other)
+                if (iou > iouThreshold) iterator.remove()
+            }
+        }
+        return result
+    }
+
+    private fun calculateIoU(a: Detection, b: Detection): Float {
+        val x1 = max(a.xMin, b.xMin)
+        val y1 = max(a.yMin, b.yMin)
+        val x2 = min(a.xMax, b.xMax)
+        val y2 = min(a.yMax, b.yMax)
+        val intersection = max(0f, x2 - x1) * max(0f, y2 - y1)
+        val areaA = (a.xMax - a.xMin) * (a.yMax - a.yMin)
+        val areaB = (b.xMax - b.xMin) * (b.yMax - b.yMin)
+        return intersection / (areaA + areaB - intersection)
     }
 
     override fun onDestroy() {

@@ -6,13 +6,14 @@ import android.util.AttributeSet
 import android.view.View
 
 class OverlayView(context: Context, attrs: AttributeSet? = null) : View(context, attrs) {
-    // gunakan top-level Detection (sesuai Detector.kt terakhir)
+
     private val detections = mutableListOf<Detection>()
 
-    // ukuran sumber (bitmap) tempat koordinat deteksi dihasilkan
-    private var srcImageWidth = 0
-    private var srcImageHeight = 0
+    // Dimensi frame kamera
+    private var frameWidth = 640f
+    private var frameHeight = 480f
 
+    // Warna dan style bounding box
     private val boxPaint = Paint().apply {
         color = Color.GREEN
         style = Paint.Style.STROKE
@@ -20,73 +21,66 @@ class OverlayView(context: Context, attrs: AttributeSet? = null) : View(context,
         isAntiAlias = true
     }
 
-    private val textPaint = Paint().apply {
-        color = Color.WHITE
-        textSize = 36f
-        isAntiAlias = true
-    }
-
     private val labelBgPaint = Paint().apply {
-        color = Color.parseColor("#80000000") // semi-transparent black
+        color = Color.argb(160, 0, 0, 0)
         style = Paint.Style.FILL
     }
 
+    private val textPaint = Paint().apply {
+        color = Color.WHITE
+        textSize = 36f
+        typeface = Typeface.DEFAULT_BOLD
+        isAntiAlias = true
+    }
+
     /**
-     * Perbarui deteksi.
-     * @param newDetections list hasil deteksi (koordinat relatif pada ukuran bitmap sumber)
-     * @param imageWidth width bitmap sumber (biasanya bitmap.width)
-     * @param imageHeight height bitmap sumber
+     * Digunakan oleh MainActivity untuk mengatur ukuran frame kamera
+     * agar proporsional dengan preview di layar.
      */
-    fun updateDetections(newDetections: List<Detection>, imageWidth: Int, imageHeight: Int) {
-        synchronized(detections) {
-            detections.clear()
-            detections.addAll(newDetections)
-            srcImageWidth = imageWidth
-            srcImageHeight = imageHeight
-        }
-        postInvalidate()
+    fun setFrameSize(width: Int, height: Int) {
+        frameWidth = width.toFloat()
+        frameHeight = height.toFloat()
+    }
+
+    /**
+     * Update hasil deteksi dan redraw overlay
+     */
+    fun updateDetections(newDetections: List<Detection>) {
+        detections.clear()
+        detections.addAll(newDetections)
+        postInvalidate() // trigger redraw
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
-        if (srcImageWidth == 0 || srcImageHeight == 0) return
+        // Scaling faktor agar bounding box sesuai ukuran layar
+        val scaleX = width / frameWidth
+        val scaleY = height / frameHeight
 
-        // ukuran view
-        val viewW = width.toFloat()
-        val viewH = height.toFloat()
+        canvas.save()
+        canvas.scale(scaleX, scaleY)
 
-        // hitung skala sederhana (non-aspect-crop). Ini asumsi preview menampilkan full image scaled to fit.
-        val scaleX = viewW / srcImageWidth.toFloat()
-        val scaleY = viewH / srcImageHeight.toFloat()
+        for (det in detections) {
+            val rect = RectF(det.xMin, det.yMin, det.xMax, det.yMax)
+            canvas.drawRect(rect, boxPaint)
 
-        synchronized(detections) {
-            for (det in detections) {
-                // skala koordinat dari image -> view
-                val left = det.xMin * scaleX
-                val top = det.yMin * scaleY
-                val right = det.xMax * scaleX
-                val bottom = det.yMax * scaleY
+            // Label + score
+            val labelText = "${det.label} ${(det.score * 100).toInt()}%"
+            val textWidth = textPaint.measureText(labelText)
+            val textHeight = textPaint.textSize
 
-                // gambar kotak
-                canvas.drawRect(left, top, right, bottom, boxPaint)
-
-                // teks label
-                val labelText = "${det.label} ${(det.score * 100).toInt()}%"
-                val textWidth = textPaint.measureText(labelText)
-                val fm = textPaint.fontMetrics
-                val textHeight = fm.bottom - fm.top
-
-                // background rectangle sedikit di atas kotak
-                val bgLeft = left
-                val bgTop = top - textHeight - 8f
-                val bgRight = left + textWidth + 12f
-                val bgBottom = top
-
-                canvas.drawRoundRect(RectF(bgLeft, bgTop, bgRight, bgBottom), 6f, 6f, labelBgPaint)
-                // teks (posisikan sedikit melayang di dalam bg)
-                canvas.drawText(labelText, bgLeft + 6f, bgBottom - 6f - fm.descent, textPaint)
-            }
+            // Background untuk label
+            val bgRect = RectF(
+                det.xMin,
+                det.yMin - textHeight - 8,
+                det.xMin + textWidth + 10,
+                det.yMin
+            )
+            canvas.drawRect(bgRect, labelBgPaint)
+            canvas.drawText(labelText, det.xMin + 5, det.yMin - 10, textPaint)
         }
+
+        canvas.restore()
     }
 }

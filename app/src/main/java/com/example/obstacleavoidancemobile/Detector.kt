@@ -26,6 +26,8 @@ data class Detection(
 @OptIn(ExperimentalStdlibApi::class)
 class Detector(private val ctx: Context, modelPath: String, labelsPath: String) : AutoCloseable {
 
+    private val CONFIDENCE_THRESHOLD = 0.45f
+    private val IOU_THRESHOLD = 0.45f
     private val interpreter: Interpreter
     private val labels: List<String>
     private var inputWidth = 320
@@ -68,7 +70,7 @@ class Detector(private val ctx: Context, modelPath: String, labelsPath: String) 
         interpreter.run(input, output)
 
         val detections = parseYoloOutput(output[0], bitmap.width, bitmap.height)
-        return nonMaxSuppression(detections, 0.45f)
+        return nonMaxSuppression(detections, IOU_THRESHOLD)
     }
 
     private fun parseYoloOutput(data: Array<FloatArray>, origW: Int, origH: Int): List<Detection> {
@@ -93,7 +95,7 @@ class Detector(private val ctx: Context, modelPath: String, labelsPath: String) 
                 }
             }
 
-            if (bestScore > 0.45f && bestCls >= 0) {
+            if (bestScore > CONFIDENCE_THRESHOLD && bestCls >= 0) {
                 val xMin = max(0f, (x - w / 2f) * origW)
                 val yMin = max(0f, (y - h / 2f) * origH)
                 val xMax = min(origW.toFloat(), (x + w / 2f) * origW)

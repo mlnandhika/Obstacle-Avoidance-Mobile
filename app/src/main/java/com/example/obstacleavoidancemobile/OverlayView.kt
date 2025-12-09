@@ -4,83 +4,146 @@ import android.content.Context
 import android.graphics.*
 import android.util.AttributeSet
 import android.view.View
+import kotlin.math.max
+import kotlin.math.min
 
 class OverlayView(context: Context, attrs: AttributeSet? = null) : View(context, attrs) {
 
     private val detections = mutableListOf<Detection>()
 
-    // Dimensi frame kamera
-    private var frameWidth = 640f
-    private var frameHeight = 480f
+    private var frameWidth = 0
+    private var frameHeight = 0
 
-    // Warna dan style bounding box
-    private val boxPaint = Paint().apply {
-        color = Color.GREEN
-        style = Paint.Style.STROKE
-        strokeWidth = 6f
-        isAntiAlias = true
+    // ===== NEW: FPS & Inference Time =====
+    private var fpsText: String = ""
+    private var inferenceText: String = ""
+
+    fun updateStats(fps: Int, inferenceMs: Long) {
+        fpsText = "FPS: $fps"
+        inferenceText = "Inference: ${inferenceMs}ms"
+        postInvalidate()
     }
 
-    private val labelBgPaint = Paint().apply {
-        color = Color.argb(160, 0, 0, 0)
-        style = Paint.Style.FILL
+    // ===== Colors for classes =====
+    private val classColorMap = mutableMapOf<String, Int>()
+    private val baseColors = listOf(
+        Color.GREEN, Color.RED, Color.BLUE,
+        Color.CYAN, Color.MAGENTA, Color.YELLOW,
+        Color.rgb(255,140,0),
+        Color.rgb(128,0,128),
+        Color.rgb(0,128,128),
+        Color.rgb(255,20,147)
+    )
+
+    private fun getColorForClass(label: String): Int {
+        return classColorMap.getOrPut(label) {
+            val idx = (label.hashCode().absoluteValue % baseColors.size)
+            baseColors[idx]
+        }
     }
 
     private val textPaint = Paint().apply {
         color = Color.WHITE
-        textSize = 36f
+        textSize = 32f
         typeface = Typeface.DEFAULT_BOLD
         isAntiAlias = true
     }
 
-    /**
-     * Digunakan oleh MainActivity untuk mengatur ukuran frame kamera
-     * agar proporsional dengan preview di layar.
-     */
-    fun setFrameSize(width: Int, height: Int) {
-        frameWidth = width.toFloat()
-        frameHeight = height.toFloat()
+    private val smallTextPaint = Paint().apply {
+        color = Color.WHITE
+        textSize = 30f
+        typeface = Typeface.DEFAULT_BOLD
+        isAntiAlias = true
     }
 
-    /**
-     * Update hasil deteksi dan redraw overlay
-     */
+    private val textBgPaint = Paint().apply {
+        color = Color.argb(180, 0, 0, 0)
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
+
+    fun setFrameSize(width: Int, height: Int) {
+        frameWidth = width
+        frameHeight = height
+        invalidate()
+    }
+
     fun updateDetections(newDetections: List<Detection>) {
         detections.clear()
         detections.addAll(newDetections)
-        postInvalidate() // trigger redraw
+        postInvalidate()
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
-        // Scaling faktor agar bounding box sesuai ukuran layar
-        val scaleX = width / frameWidth
-        val scaleY = height / frameHeight
+        if (frameWidth == 0 || frameHeight == 0) return
 
-        canvas.save()
-        canvas.scale(scaleX, scaleY)
+        val scaleX = width / frameWidth.toFloat()
+        val scaleY = height / frameHeight.toFloat()
 
+        // ===== FPS & Inference Time (KIRI ATAS) =====
+        drawPerformanceStats(canvas)
+
+        // ===== Draw Bounding Boxes =====
         for (det in detections) {
-            val rect = RectF(det.xMin, det.yMin, det.xMax, det.yMax)
+
+            val left = det.xMin * scaleX
+            val top = det.yMin * scaleY
+            val right = det.xMax * scaleX
+            val bottom = det.yMax * scaleY
+
+            val boxColor = getColorForClass(det.label)
+            val boxPaint = Paint().apply {
+                color = boxColor
+                style = Paint.Style.STROKE
+                strokeWidth = 3f
+                isAntiAlias = true
+            }
+
+            val rect = RectF(left, top, right, bottom)
             canvas.drawRect(rect, boxPaint)
 
-            // Label + score
-            val labelText = "${det.label} ${(det.score * 100).toInt()}%"
-            val textWidth = textPaint.measureText(labelText)
+            val centerX = (left + right) / 2f
+            val positionText = when {
+                centerX < width * 0.33f -> "Left"
+                centerX > width * 0.66f -> "Right"
+                else -> "Center"
+            }
+
+            val text = "${det.label} ${(det.score * 100).toInt()}% - $positionText"
+            val textWidth = textPaint.measureText(text)
             val textHeight = textPaint.textSize
 
-            // Background untuk label
             val bgRect = RectF(
-                det.xMin,
-                det.yMin - textHeight - 8,
-                det.xMin + textWidth + 10,
-                det.yMin
+                left,
+                top - textHeight - 16f,
+                left + textWidth + 20f,
+                top
             )
-            canvas.drawRect(bgRect, labelBgPaint)
-            canvas.drawText(labelText, det.xMin + 5, det.yMin - 10, textPaint)
-        }
 
-        canvas.restore()
+            canvas.drawRoundRect(bgRect, 8f, 8f, textBgPaint)
+            canvas.drawText(text, left + 10f, top - 10f, textPaint)
+        }
     }
+
+    private fun drawPerformanceStats(canvas: Canvas) {
+        val padding = 20f
+        val lineHeight = smallTextPaint.textSize + 10f
+
+        val statsText = "$fpsText\n$inferenceText"
+        val widthText = smallTextPaint.measureText("Inference: 000ms") + 40f
+        val heightText = lineHeight * 2 + 30f
+
+        // background
+        val bgRect = RectF(10f, 10f, 10f + widthText, 10f + heightText)
+        canvas.drawRoundRect(bgRect, 12f, 12f, textBgPaint)
+
+        // draw text
+        canvas.drawText(fpsText, 30f, 40f, smallTextPaint)
+        canvas.drawText(inferenceText, 30f, 40f + lineHeight, smallTextPaint)
+    }
+
+    private val Int.absoluteValue: Int
+        get() = if (this < 0) -this else this
 }

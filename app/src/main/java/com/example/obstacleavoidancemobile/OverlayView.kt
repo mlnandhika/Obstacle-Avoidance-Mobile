@@ -4,8 +4,6 @@ import android.content.Context
 import android.graphics.*
 import android.util.AttributeSet
 import android.view.View
-import kotlin.math.max
-import kotlin.math.min
 
 class OverlayView(context: Context, attrs: AttributeSet? = null) : View(context, attrs) {
 
@@ -14,7 +12,6 @@ class OverlayView(context: Context, attrs: AttributeSet? = null) : View(context,
     private var frameWidth = 0
     private var frameHeight = 0
 
-    // ===== NEW: FPS & Inference Time =====
     private var fpsText: String = ""
     private var inferenceText: String = ""
 
@@ -24,7 +21,7 @@ class OverlayView(context: Context, attrs: AttributeSet? = null) : View(context,
         postInvalidate()
     }
 
-    // ===== Colors for classes =====
+    // Colors for classes
     private val classColorMap = mutableMapOf<String, Int>()
     private val baseColors = listOf(
         Color.GREEN, Color.RED, Color.BLUE,
@@ -82,10 +79,10 @@ class OverlayView(context: Context, attrs: AttributeSet? = null) : View(context,
         val scaleX = width / frameWidth.toFloat()
         val scaleY = height / frameHeight.toFloat()
 
-        // ===== FPS & Inference Time (KIRI ATAS) =====
+        // Draw FPS and Inference Time
         drawPerformanceStats(canvas)
 
-        // ===== Draw Bounding Boxes =====
+        // Draw Bounding Boxes
         for (det in detections) {
 
             val left = det.xMin * scaleX

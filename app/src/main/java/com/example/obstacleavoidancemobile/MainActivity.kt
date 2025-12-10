@@ -1,7 +1,6 @@
 package com.example.obstacleavoidancemobile
 
 import android.Manifest
-import android.content.pm.PackageManager
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
@@ -113,7 +112,7 @@ class MainActivity : ComponentActivity() {
                 overlay.updateDetections(detections)
                 overlay.updateStats(fps, inferenceMs)
 
-                // ===== TTS (every 3 seconds) =====
+                // TTS 3 seconds
                 if (detections.isNotEmpty()) {
                     val t = System.currentTimeMillis()
                     if (t - lastSpokenTime > speakInterval) {

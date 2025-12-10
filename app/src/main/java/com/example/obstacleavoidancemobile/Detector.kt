@@ -2,7 +2,6 @@ package com.example.obstacleavoidancemobile
 
 import android.content.Context
 import android.graphics.*
-import android.media.Image
 import android.util.Log
 import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter

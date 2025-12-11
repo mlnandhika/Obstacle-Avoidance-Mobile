@@ -13,6 +13,16 @@ import java.nio.channels.FileChannel
 import kotlin.math.max
 import kotlin.math.min
 
+/**
+ * Data class yang merepresentasikan hasil deteksi objek.
+ *
+ * @param label Kelas objek
+ * @param score Confidence dari model (0.0–1.0)
+ * @param xMin Bounding box kiri
+ * @param yMin Bounding box atas
+ * @param xMax Bounding box kanan
+ * @param yMax Bounding box bawah
+ */
 data class Detection(
     val label: String,
     val score: Float,
@@ -22,22 +32,45 @@ data class Detection(
     val yMax: Float
 )
 
+/**
+ * Detector
+ * ------------------------------------------------------------------
+ * Kelas ini menangani seluruh proses inferensi model YOLO pada TFLite,
+ * meliputi:
+ *
+ * - Load model & label
+ * - Preprocess input bitmap agar sesuai dimensi model
+ * - Run inference menggunakan TensorFlow Lite Interpreter
+ * - Parse output YOLO menjadi koordinat bounding box
+ * - Terapkan Non-Maximum Suppression (NMS)
+ *
+ * Output akhir berupa list Detection yang telah difilter.
+ */
 @OptIn(ExperimentalStdlibApi::class)
 class Detector(private val ctx: Context, modelPath: String, labelsPath: String) : AutoCloseable {
 
+    // Threshold default YOLO untuk confidence & IOU
     private val CONFIDENCE_THRESHOLD = 0.45f
     private val IOU_THRESHOLD = 0.45f
+
+    // TensorFlow Lite Interpreter
     private val interpreter: Interpreter
+
+    // Label daftar kelas YOLO
     private val labels: List<String>
+
+    // Dimensi input model (diambil dari tensor input)
     private var inputWidth = 320
     private var inputHeight = 320
     private var inputChannels = 3
     private var isModelQuantized = false
 
     init {
+        // Load model dari assets
         val modelBuffer = loadModelFile(modelPath)
         interpreter = Interpreter(modelBuffer)
 
+        // Ambil informasi tensor input
         val tensor = interpreter.getInputTensor(0)
         val shape = tensor.shape()
         val dtype = tensor.dataType()
@@ -46,8 +79,9 @@ class Detector(private val ctx: Context, modelPath: String, labelsPath: String) 
             inputWidth = shape[2]
             inputChannels = shape[3]
         }
-        isModelQuantized = (dtype == DataType.UINT8)
+        isModelQuantized = (dtype == DataType.UINT8) // Cek apakah model quantized
 
+        // Load daftar label
         labels = try {
             ctx.assets.open(labelsPath).bufferedReader().readLines()
         } catch (e: Exception) {
@@ -56,10 +90,21 @@ class Detector(private val ctx: Context, modelPath: String, labelsPath: String) 
         }
     }
 
+    /**
+     * Cleanup interpreter saat objek dihapus
+     */
     override fun close() {
         interpreter.close()
     }
 
+    /**
+     * Melakukan inferensi YOLO pada bitmap:
+     * 1. Resize bitmap sesuai input tensor model
+     * 2. Convert ke ByteBuffer
+     * 3. Jalankan interpreter
+     * 4. Parse output YOLO
+     * 5. Terapkan NMS
+     */
     fun detect(bitmap: Bitmap): List<Detection> {
         val scaled = Bitmap.createScaledBitmap(bitmap, inputWidth, inputHeight, true)
         val input = convertBitmapToByteBuffer(scaled)
@@ -72,6 +117,10 @@ class Detector(private val ctx: Context, modelPath: String, labelsPath: String) 
         return nonMaxSuppression(detections, IOU_THRESHOLD)
     }
 
+    /**
+     * Mengubah output YOLO (center_x, center_y, width, height, kelas) menjadi
+     * koordinat bounding box asli pada resolusi kamera.
+     */
     private fun parseYoloOutput(data: Array<FloatArray>, origW: Int, origH: Int): List<Detection> {
         val channels = data.size
         val numBoxes = data[0].size
@@ -84,6 +133,7 @@ class Detector(private val ctx: Context, modelPath: String, labelsPath: String) 
             val w = data[2][i]
             val h = data[3][i]
 
+            // Cari kelas dengan skor tertinggi
             var bestScore = 0f
             var bestCls = -1
             for (c in 0 until numClasses) {
@@ -94,6 +144,7 @@ class Detector(private val ctx: Context, modelPath: String, labelsPath: String) 
                 }
             }
 
+            // Filter berdasarkan confidence threshold
             if (bestScore > CONFIDENCE_THRESHOLD && bestCls >= 0) {
                 val xMin = max(0f, (x - w / 2f) * origW)
                 val yMin = max(0f, (y - h / 2f) * origH)
@@ -106,6 +157,10 @@ class Detector(private val ctx: Context, modelPath: String, labelsPath: String) 
         return results
     }
 
+    /**
+     * Non-Maximum Suppression (NMS)
+     * Menghapus bounding box yang tumpang tindih tinggi (IOU)
+     */
     private fun nonMaxSuppression(detections: List<Detection>, iouThreshold: Float): List<Detection> {
         val result = mutableListOf<Detection>()
         val sorted = detections.sortedByDescending { it.score }.toMutableList()
@@ -125,6 +180,10 @@ class Detector(private val ctx: Context, modelPath: String, labelsPath: String) 
         return result
     }
 
+    /**
+     * Menghitung Intersection-over-Union (IOU) antara dua bounding box.
+     * Digunakan pada tahap NMS.
+     */
     private fun iou(a: Detection, b: Detection): Float {
         val interLeft = max(a.xMin, b.xMin)
         val interTop = max(a.yMin, b.yMin)
@@ -138,6 +197,9 @@ class Detector(private val ctx: Context, modelPath: String, labelsPath: String) 
         return interArea / (areaA + areaB - interArea + 1e-6f)
     }
 
+    /**
+     * Load model TFLite dari assets
+     */
     private fun loadModelFile(path: String): MappedByteBuffer {
         val afd = ctx.assets.openFd(path)
         FileInputStream(afd.fileDescriptor).use { fis ->
@@ -145,6 +207,10 @@ class Detector(private val ctx: Context, modelPath: String, labelsPath: String) 
         }
     }
 
+    /**
+     * Convert Bitmap ke ByteBuffer sesuai format input model.
+     * Mendukung Float32 maupun Quantized (UINT8).
+     */
     private fun convertBitmapToByteBuffer(bitmap: Bitmap): ByteBuffer {
         val bytePerChannel = if (isModelQuantized) 1 else 4
         val buffer = ByteBuffer.allocateDirect(1 * inputWidth * inputHeight * inputChannels * bytePerChannel)

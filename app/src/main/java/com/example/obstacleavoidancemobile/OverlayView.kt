@@ -179,12 +179,12 @@ class OverlayView(context: Context, attrs: AttributeSet? = null) : View(context,
         val heightText = lineHeight * 2 + 30f
 
         // Background
-        val bgRect = RectF(10f, 10f, 10f + widthText, 10f + heightText)
+        val bgRect = RectF(10f, 80f, 10f + widthText, 80f + heightText)
         canvas.drawRoundRect(bgRect, 12f, 12f, textBgPaint)
 
         // Draw text
-        canvas.drawText(fpsText, 30f, 40f, smallTextPaint)
-        canvas.drawText(inferenceText, 30f, 40f + lineHeight, smallTextPaint)
+        canvas.drawText(fpsText, 30f, 110f, smallTextPaint)
+        canvas.drawText(inferenceText, 30f, 110f + lineHeight, smallTextPaint)
     }
 
     private val Int.absoluteValue: Int
